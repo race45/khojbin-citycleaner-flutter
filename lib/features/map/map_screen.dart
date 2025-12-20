@@ -2,16 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
-import '../../core/widgets/app_header.dart';
-import '../../core/services/location_service.dart';
-import '../../core/services/geocoding_service.dart';
-import '../../core/utils/distance_utils.dart';
-import '../../core/utils/polyline_utils.dart';
-import '../../core/widgets/directions_bottom_sheet.dart';
+import 'package:citycleaner/core/widgets/app_header.dart';
+import 'package:citycleaner/core/services/location_service.dart';
+import 'package:citycleaner/core/services/geocoding_service.dart';
+import 'package:citycleaner/core/utils/distance_utils.dart';
+import 'package:citycleaner/core/utils/polyline_utils.dart';
+import 'package:citycleaner/core/widgets/directions_bottom_sheet.dart';
+
 
 import 'map_controls.dart';
 import 'map_markers.dart';
-import '../sheets/add_bin_sheet.dart';
+import 'package:citycleaner/features/sheets/add_bin_sheet.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -22,9 +23,18 @@ class MapScreen extends StatefulWidget {
 
 class _MapScreenState extends State<MapScreen> {
   final MapController _mapController = MapController();
-  List<LatLng> _routePoints = [];
 
-  final LatLng _binLocation = const LatLng(23.2610, 77.4140);
+  List<LatLng> _routePoints = [];
+  LatLng? _userLocation;
+
+  double _selectedRadiusKm = 0.5; // default 500m
+
+  // Temporary bins (later from backend)
+  final List<LatLng> _allBins = [
+    LatLng(23.2610, 77.4140),
+    LatLng(23.2580, 77.4100),
+    LatLng(23.2650, 77.4200),
+  ];
 
   // -------------------------------
   // MY LOCATION
@@ -37,11 +47,12 @@ class _MapScreenState extends State<MapScreen> {
       final userLatLng =
           LatLng(position.latitude, position.longitude);
 
-      _mapController.move(userLatLng, 16);
-
       setState(() {
+        _userLocation = userLatLng;
         _routePoints = [];
       });
+
+      _mapController.move(userLatLng, 16);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -50,19 +61,19 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // -------------------------------
-  // NAME-BASED SEARCH (IMPORTANT)
+  // NAME SEARCH
   // -------------------------------
   void _openSearchDialog() {
-    final searchController = TextEditingController();
+    final controller = TextEditingController();
 
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text("Search Location"),
         content: TextField(
-          controller: searchController,
+          controller: controller,
           decoration: const InputDecoration(
-            hintText: "Enter place name (e.g. Delhi, Bhopal)",
+            hintText: "Enter place name",
           ),
         ),
         actions: [
@@ -72,7 +83,7 @@ class _MapScreenState extends State<MapScreen> {
           ),
           ElevatedButton(
             onPressed: () async {
-              final query = searchController.text.trim();
+              final query = controller.text.trim();
               if (query.isEmpty) return;
 
               Navigator.pop(context);
@@ -83,13 +94,10 @@ class _MapScreenState extends State<MapScreen> {
               if (!mounted) return;
 
               if (result != null) {
+                setState(() {
+                  _userLocation = result;
+                });
                 _mapController.move(result, 15);
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Location not found"),
-                  ),
-                );
               }
             },
             child: const Text("Search"),
@@ -100,55 +108,61 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // -------------------------------
-  // BIN TAP → ROUTE
+  // BIN TAP
   // -------------------------------
-  Future<void> _onBinTapped(BuildContext context, LatLng binLatLng) async {
-    try {
-      final position = await LocationService.getCurrentLocation();
-      if (!mounted) return;
+  Future<void> _onBinTapped(LatLng binLatLng) async {
+    if (_userLocation == null) return;
 
-      final userLatLng =
-          LatLng(position.latitude, position.longitude);
+    final distanceKm = DistanceUtils.calculateDistance(
+      _userLocation!.latitude,
+      _userLocation!.longitude,
+      binLatLng.latitude,
+      binLatLng.longitude,
+    );
 
-      final distanceKm = DistanceUtils.calculateDistance(
-        userLatLng.latitude,
-        userLatLng.longitude,
-        binLatLng.latitude,
-        binLatLng.longitude,
+    final route = PolylineUtils.buildStraightRoute(
+      _userLocation!,
+      binLatLng,
+    );
+
+    setState(() {
+      _routePoints = route;
+    });
+
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: LatLngBounds.fromPoints(route),
+        padding: const EdgeInsets.all(80),
+      ),
+    );
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) =>
+          DirectionsBottomSheet(distanceKm: distanceKm),
+    );
+  }
+
+  // -------------------------------
+  // FILTERED BINS BY RADIUS
+  // -------------------------------
+  List<LatLng> get _visibleBins {
+    if (_userLocation == null) return _allBins;
+
+    return _allBins.where((bin) {
+      final distance = DistanceUtils.calculateDistance(
+        _userLocation!.latitude,
+        _userLocation!.longitude,
+        bin.latitude,
+        bin.longitude,
       );
-
-      final route = PolylineUtils.buildStraightRoute(
-        userLatLng,
-        binLatLng,
-      );
-
-      setState(() {
-        _routePoints = route;
-      });
-
-      _mapController.fitCamera(
-        CameraFit.bounds(
-          bounds: LatLngBounds.fromPoints(route),
-          padding: const EdgeInsets.all(80),
-        ),
-      );
-
-      showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        builder: (_) => DirectionsBottomSheet(
-          distanceKm: distanceKm,
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
-    }
+      return distance <= _selectedRadiusKm;
+    }).toList();
   }
 
   // -------------------------------
@@ -184,9 +198,10 @@ class _MapScreenState extends State<MapScreen> {
                 ),
 
               MarkerLayer(
-                markers: buildMarkers(() {
-                  _onBinTapped(context, _binLocation);
-                }),
+                markers: buildMarkersForBins(
+                  _visibleBins,
+                  _onBinTapped,
+                ),
               ),
             ],
           ),
@@ -204,6 +219,12 @@ class _MapScreenState extends State<MapScreen> {
             child: MapControls(
               onMyLocationTap: _goToMyLocation,
               onSearchTap: _openSearchDialog,
+              selectedRadiusKm: _selectedRadiusKm,
+              onRadiusChanged: (value) {
+                setState(() {
+                  _selectedRadiusKm = value;
+                });
+              },
             ),
           ),
 
