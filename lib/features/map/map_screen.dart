@@ -9,7 +9,6 @@ import 'package:citycleaner/core/utils/distance_utils.dart';
 import 'package:citycleaner/core/utils/polyline_utils.dart';
 import 'package:citycleaner/core/widgets/directions_bottom_sheet.dart';
 
-
 import 'map_controls.dart';
 import 'map_markers.dart';
 import 'package:citycleaner/features/sheets/add_bin_sheet.dart';
@@ -27,9 +26,11 @@ class _MapScreenState extends State<MapScreen> {
   List<LatLng> _routePoints = [];
   LatLng? _userLocation;
 
-  double _selectedRadiusKm = 0.5; // default 500m
+  double _selectedRadiusKm = 0.5;
 
-  // Temporary bins (later from backend)
+  /// ⭐ NEW: selected marker
+  LatLng? _selectedBin;
+
   final List<LatLng> _allBins = [
     LatLng(23.2610, 77.4140),
     LatLng(23.2580, 77.4100),
@@ -44,19 +45,20 @@ class _MapScreenState extends State<MapScreen> {
       final position = await LocationService.getCurrentLocation();
       if (!mounted) return;
 
-      final userLatLng =
-          LatLng(position.latitude, position.longitude);
+      final userLatLng = LatLng(position.latitude, position.longitude);
 
       setState(() {
         _userLocation = userLatLng;
         _routePoints = [];
+        _selectedBin = null;
       });
 
       _mapController.move(userLatLng, 16);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
     }
   }
 
@@ -72,9 +74,7 @@ class _MapScreenState extends State<MapScreen> {
         title: const Text("Search Location"),
         content: TextField(
           controller: controller,
-          decoration: const InputDecoration(
-            hintText: "Enter place name",
-          ),
+          decoration: const InputDecoration(hintText: "Enter place name"),
         ),
         actions: [
           TextButton(
@@ -88,14 +88,13 @@ class _MapScreenState extends State<MapScreen> {
 
               Navigator.pop(context);
 
-              final result =
-                  await GeocodingService.searchByName(query);
-
+              final result = await GeocodingService.searchByName(query);
               if (!mounted) return;
 
               if (result != null) {
                 setState(() {
                   _userLocation = result;
+                  _selectedBin = null;
                 });
                 _mapController.move(result, 15);
               }
@@ -108,10 +107,23 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // -------------------------------
-  // BIN TAP
+  // BIN TAP (UPDATED)
   // -------------------------------
   Future<void> _onBinTapped(LatLng binLatLng) async {
-    if (_userLocation == null) return;
+    if (_userLocation == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enable My Location to get directions'),
+        ),
+      );
+
+      setState(() {
+        _selectedBin = binLatLng;
+        _routePoints.clear();
+      });
+
+      return;
+    }
 
     final distanceKm = DistanceUtils.calculateDistance(
       _userLocation!.latitude,
@@ -120,12 +132,10 @@ class _MapScreenState extends State<MapScreen> {
       binLatLng.longitude,
     );
 
-    final route = PolylineUtils.buildStraightRoute(
-      _userLocation!,
-      binLatLng,
-    );
+    final route = PolylineUtils.buildStraightRoute(_userLocation!, binLatLng);
 
     setState(() {
+      _selectedBin = binLatLng;
       _routePoints = route;
     });
 
@@ -143,13 +153,12 @@ class _MapScreenState extends State<MapScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (_) =>
-          DirectionsBottomSheet(distanceKm: distanceKm),
+      builder: (_) => DirectionsBottomSheet(distanceKm: distanceKm),
     );
   }
 
   // -------------------------------
-  // FILTERED BINS BY RADIUS
+  // FILTERED BINS
   // -------------------------------
   List<LatLng> get _visibleBins {
     if (_userLocation == null) return _allBins;
@@ -182,8 +191,9 @@ class _MapScreenState extends State<MapScreen> {
             children: [
               TileLayer(
                 urlTemplate:
-                    "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-                userAgentPackageName: 'com.citycleaner.app',
+                    'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+                subdomains: const ['a', 'b', 'c'],
+                userAgentPackageName: 'com.example.khojbin',
               ),
 
               if (_routePoints.isNotEmpty)
@@ -191,27 +201,25 @@ class _MapScreenState extends State<MapScreen> {
                   polylines: [
                     Polyline(
                       points: _routePoints,
-                      strokeWidth: 4,
-                      color: Colors.blueAccent,
+                      strokeWidth: 5,
+                      color: Colors.blue.withAlpha(230), // ~90% opacity
+                      strokeCap: StrokeCap.round,
+                      strokeJoin: StrokeJoin.round,
                     ),
                   ],
                 ),
 
               MarkerLayer(
                 markers: buildMarkersForBins(
-                  _visibleBins,
-                  _onBinTapped,
+                  bins: _visibleBins,
+                  selectedBin: _selectedBin,
+                  onBinTap: _onBinTapped,
                 ),
               ),
             ],
           ),
 
-          const Positioned(
-            top: 40,
-            left: 16,
-            right: 16,
-            child: AppHeader(),
-          ),
+          const Positioned(top: 40, left: 16, right: 16, child: AppHeader()),
 
           Positioned(
             right: 16,
@@ -223,6 +231,8 @@ class _MapScreenState extends State<MapScreen> {
               onRadiusChanged: (value) {
                 setState(() {
                   _selectedRadiusKm = value;
+                  _selectedBin = null;
+                  _routePoints.clear();
                 });
               },
             ),
@@ -237,8 +247,9 @@ class _MapScreenState extends State<MapScreen> {
                   context: context,
                   isScrollControlled: true,
                   shape: const RoundedRectangleBorder(
-                    borderRadius:
-                        BorderRadius.vertical(top: Radius.circular(20)),
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(20),
+                    ),
                   ),
                   builder: (_) => AddBinSheet(),
                 );
