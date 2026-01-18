@@ -152,8 +152,7 @@ flutter run
 ## 👨‍💻 Author
 
 Prateek Kumar  
-Sushant Saurabh
-Flutter Developer  
+Sushant Saurabh 
 📍 India  
 
 ## 📜 License
